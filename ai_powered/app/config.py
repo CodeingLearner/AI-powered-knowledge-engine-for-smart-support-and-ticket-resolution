@@ -36,9 +36,26 @@ def get_int_env(key, default):
         return int(default)
 
 
+def get_env(key, default=None):
+    load_app_env()
+    return os.getenv(key, default)
+
+
+def get_int_env(key, default):
+    value = get_env(key, str(default))
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
 def get_float_env(key, default):
     value = get_env(key, str(default))
     try:
         return float(value)
     except (TypeError, ValueError):
         return float(default)
+
+
+# LLM Configuration
+OLLAMA_MODEL = get_env("OLLAMA_MODEL", "llama3.1:8b")  # Use existing model

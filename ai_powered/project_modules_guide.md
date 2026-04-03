@@ -42,7 +42,7 @@
 
 ### 4. [llm_engine.py](file:///c:/Users/ChetanAtla/Desktop/backup/use/AI-Based-Ticket-Resolution-System-main/app/llm_engine.py) — AI Resolution Generator
 
-- Uses the **`llama3.2:1b`** model via Ollama
+- Uses the **`llama3.1:8b`** model via Ollama
 - When a ticket arrives, it:
   1. Calls `rag_engine.get_relevant_context()` to retrieve relevant document chunks
   2. Builds a prompt combining the ticket details + retrieved context
@@ -143,7 +143,7 @@ pip install streamlit ollama langchain-community langchain-text-splitters faiss-
 > Pull both required models beforehand:
 > ```bash
 > ollama pull tinyllama      # Used for embeddings in rag_engine.py
-> ollama pull llama3.2:1b    # Used for resolution generation in llm_engine.py
+> ollama pull llama3.1:8b    # Used for resolution generation in llm_engine.py
 > ```
 
 ---
@@ -175,7 +175,7 @@ ticket_service.submit_ticket()
         ↓
 llm_engine.analyze_ticket()
     ↓               ↓
-rag_engine          ollama (llama3.2:1b)
+rag_engine          ollama (llama3.1:8b)
 (FAISS search)      (generates resolution)
         ↓
 database.py (saves ticket + resolution)

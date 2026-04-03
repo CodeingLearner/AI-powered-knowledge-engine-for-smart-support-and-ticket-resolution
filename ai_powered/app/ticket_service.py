@@ -10,6 +10,7 @@ import pandas as pd
 import config
 import database
 import llm_engine
+import auth_service
 
 STOP_WORDS = {
     "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "how", "i",
@@ -350,7 +351,7 @@ def get_admin_kpis():
             SUM(CASE WHEN resolution_status = 'tentative' THEN 1 ELSE 0 END) AS tentative_tickets,
             ROUND(AVG(confidence_score), 3) AS avg_confidence,
             SUM(CASE WHEN feedback_value = 'helpful' THEN 1 ELSE 0 END) AS helpful_count,
-            SUM(CASE WHEN feedback_value = 'not_helpful' THEN 1 ELSE 0 END) AS not_helpful_count,
+            SUM(CASE WHEN feedback_value = 'not_helpful' THEN 1 ELSE 0 END) AS not_helpful_count
         FROM tickets
         """
         )
@@ -377,3 +378,9 @@ def get_top_questions(limit=10):
         )
     finally:
         conn.close()
+
+def initialize_system():
+    """Initializes the system: database and AI model."""
+    database.init_db()
+    auth_service.create_default_users()
+    llm_engine.check_model_availability()
