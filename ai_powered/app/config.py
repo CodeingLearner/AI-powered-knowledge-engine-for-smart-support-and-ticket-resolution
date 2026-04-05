@@ -58,4 +58,4 @@ def get_float_env(key, default):
 
 
 # LLM Configuration
-OLLAMA_MODEL = get_env("OLLAMA_MODEL", "llama3.1:8b")  # Use existing model
+OLLAMA_MODEL = get_env("OLLAMA_MODEL", "phi3:latest")  # Use phi3 to avoid OOM

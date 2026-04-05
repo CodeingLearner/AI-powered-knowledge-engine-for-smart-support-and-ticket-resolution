@@ -52,7 +52,8 @@ def _slugify_filename(text):
 
 
 def _suggest_kb_filename(title, description, category):
-    source_text = f"{title} {description}".strip().lower()
+    # ✅ Use only the title to generate the filename; descriptions are prone to user typos like `exolain`
+    source_text = f"{title}".strip().lower()
     tokens = [
         token for token in re.findall(r"[a-z0-9]+", source_text)
         if token not in {

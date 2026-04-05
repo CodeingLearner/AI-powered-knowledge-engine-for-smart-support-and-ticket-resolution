@@ -2,6 +2,7 @@ import os
 import shutil
 import logging
 import math
+import re
 import ollama
 from typing import Dict, List
 from langchain_community.vectorstores import FAISS
@@ -144,14 +145,32 @@ def get_relevant_context(query: str, k: int = 4) -> Dict:
         docs_with_scores = db.similarity_search_with_score(query, k=k)
 
         matches: List[Dict] = []
+        query_tokens = set(re.findall(r"\w+", query.lower()))
+
         for doc, distance in docs_with_scores:
-            # ✅ exp decay: distance ~0 → score ~1.0, distance ~10 → score ~0.6
-            similarity_score = round(max(0.0, min(1.0, math.exp(-distance / 10.0))), 4)
+            # 1. Semantic Score (Vector distance)
+            semantic_score = round(max(0.0, min(1.0, math.exp(-distance / 150.0))), 4)
+
+            # 2. Lexical / Keyword Score (Exact Match)
+            chunk_tokens = set(re.findall(r"[a-z0-9]+", doc.page_content.lower()))
+            if query_tokens:
+                keyword_matches = len(query_tokens.intersection(chunk_tokens))
+                keyword_score = keyword_matches / len(query_tokens)
+            else:
+                keyword_score = 0.0
+
+            # 3. Hybrid Fusion (Alpha Weighting)
+            alpha_semantic = 0.55
+            alpha_keyword = 0.45
+            hybrid_score = round((alpha_semantic * semantic_score) + (alpha_keyword * keyword_score), 4)
+
             matches.append({
                 "content":          doc.page_content,
                 "metadata":         doc.metadata,
                 "distance":         round(float(distance), 4),
-                "similarity_score": similarity_score,
+                "semantic_score":   semantic_score,
+                "keyword_score":    round(keyword_score, 4),
+                "similarity_score": hybrid_score,
             })
 
         # ✅ Drop very poor matches
