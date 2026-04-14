@@ -160,6 +160,7 @@ def _upsert_knowledge_gap(
         )
         should_alert_for_unresolved = (
             resolution_status == "unresolved"
+            and occurrence_count >= gap_alert_threshold
             and occurrence_count > last_alert_count
         )
         if should_alert_for_tentative or should_alert_for_unresolved:
@@ -217,7 +218,9 @@ def _upsert_knowledge_gap(
         should_alert_for_tentative = (
             resolution_status == "tentative" and 1 >= gap_alert_threshold
         )
-        should_alert_for_unresolved = resolution_status == "unresolved"
+        should_alert_for_unresolved = (
+            resolution_status == "unresolved" and 1 >= gap_alert_threshold
+        )
         if should_alert_for_tentative or should_alert_for_unresolved:
             alert_result = _send_slack_alert(
                 {
@@ -520,22 +523,24 @@ def get_knowledge_gap_groups(limit=10):
         conn.close()
 
 
-def get_knowledge_gap_heatmap():
+def get_knowledge_gap_heatmap(limit=25):
     conn = database.get_db_connection()
     try:
         return pd.read_sql_query(
             """
             SELECT
-                category,
-                COALESCE(gap_group_key, 'no_gap') AS topic_key,
-                ROUND(AVG(confidence_score), 3) AS avg_confidence_score,
-                COUNT(*) AS ticket_count
-            FROM tickets
-            WHERE resolution_status IN ('tentative', 'unresolved')
-            GROUP BY category, COALESCE(gap_group_key, 'no_gap')
-            ORDER BY avg_confidence_score ASC, ticket_count DESC
+                COALESCE(category, 'Uncategorized') AS category,
+                display_query AS topic_label,
+                gap_group_key,
+                ROUND(avg_confidence_score, 3) AS avg_confidence_score,
+                occurrence_count AS ticket_count,
+                last_seen_at
+            FROM knowledge_gap_events
+            ORDER BY avg_confidence_score ASC, occurrence_count DESC, last_seen_at DESC
+            LIMIT ?
             """,
             conn,
+            params=(limit,),
         )
     finally:
         conn.close()
