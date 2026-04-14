@@ -129,11 +129,22 @@ Do NOT say "As an AI" or "I cannot help".
 If no context is available, provide general best-practice steps.
 """
 
+    priority_instruction = ""
+    if priority.lower() == "critical":
+        priority_instruction = "This is a CRITICAL priority ticket. Emphasize extreme urgency, recommend immediate action, and keep steps critical and fast-paced."
+    elif priority.lower() == "high":
+        priority_instruction = "This is a HIGH priority ticket. Provide a prompt, detailed resolution to unblock the user quickly."
+    elif priority.lower() == "medium":
+        priority_instruction = "This is a MEDIUM priority ticket. Provide a standard, helpful resolution procedure."
+    elif priority.lower() == "low":
+        priority_instruction = "This is a LOW priority ticket. Provide a standard resolution and optionally note that it falls under regular service level agreements."
+
     # ✅ Use system + user roles — llama3.1:8b is fine-tuned for this
     system_prompt = (
         "You are a precise IT support assistant. "
         "You resolve support tickets using the provided knowledge base context. "
-        "Be concise, practical, and always respond with actionable steps."
+        "Be concise, practical, and always respond with actionable steps. "
+        f"{priority_instruction}"
     )
 
     try:

@@ -34,22 +34,43 @@ An intelligent ticket resolution system using RAG (Retrieval-Augmented Generatio
 
 ## Project Structure
 
+## 📁 Project Structure
+
 ```
-ai_powered/
-├── app/
-│   ├── app.py              # Main Streamlit UI
-│   ├── auth_service.py     # User authentication
-│   ├── database.py         # SQLite database operations
-│   ├── llm_engine.py       # AI resolution engine
-│   ├── rag_engine.py       # Knowledge base & embeddings
-│   ├── ticket_service.py   # Business logic
-│   ├── config.py           # Configuration
-│   └── test_backend.py     # Backend testing
-├── data/
-│   ├── raw/                # Knowledge base documents (PDF/TXT)
-│   └── processed/          # Processed data & FAISS index
-└── ingest.py               # Document ingestion script
+AI-powered/
+│
+├── ai_powered/                # Main application package
+│   ├── app/                  # Core application logic
+│   │   ├── views/            # UI views (Streamlit dashboards)
+│   │   │   ├── __init__.py
+│   │   │   ├── admin_dashboard.py
+│   │   │   ├── user_dashboard.py
+│   │   │   ├── components.py
+│   │   │   └── styles.py
+│   │   │
+│   │   ├── auth_service.py   # Authentication logic
+│   │   ├── config.py         # App configuration & environment variables
+│   │   ├── database.py       # Database connection and queries
+│   │   ├── llm_engine.py     # AI/LLM processing
+│   │   ├── rag_engine.py     # Retrieval-Augmented Generation logic
+│   │   ├── ticket_service.py # Support ticket handling
+│   │   ├── test_backend.py   # Backend tests
+│   │   └── test_retrieval.py # Retrieval tests
+│   │
+│   ├── data/                 # Data storage / datasets
+│   ├── ingest.py             # Data ingestion script
+│   ├── logo.png              # Project logo
+│   └── project_modules_guide.md
+│  
+│
+├── venv/                     # Virtual environment (ignored in Git)
+├── .env                      # Environment variables (ignored)
+├── .gitignore                # Git ignore rules
+├── README.md                 # Project documentation
+├── requirements.txt          # Python dependencies
+└── package-lock.json         # Node dependencies (if used)
 ```
+
 
 ## Adding Knowledge Base
 
@@ -65,3 +86,15 @@ ai_powered/
 - Ollama (for local AI models)
 - Install llama3.1:8b model: `ollama pull llama3.1:8b`
 - Install tinyllama model: `ollama pull tinyllama`
+- bcrypt
+- langchain
+- langchain-community
+- langchain-core
+- langchain-text-splitters
+- faiss-cpu
+- tqdm
+- pypdf
+- numpy
+- streamlit
+- pandas
+- plotly

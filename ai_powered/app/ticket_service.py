@@ -54,6 +54,11 @@ def get_slack_webhook_url():
     return (config.get_env("SLACK_WEBHOOK_URL", "") or "").strip()
 
 
+def _table_has_column(cursor, table_name, column_name):
+    cursor.execute(f"PRAGMA table_info({table_name})")
+    return any(row[1] == column_name for row in cursor.fetchall())
+
+
 def _send_slack_alert(event_row):
     slack_webhook_url = get_slack_webhook_url()
     if not slack_webhook_url:
@@ -66,7 +71,8 @@ def _send_slack_alert(event_row):
         {
             "text": (
                 "⚠ Knowledge Gap Detected\n"
-                f"Top unresolved question: {event_row['display_query']}\n"
+                f"Latest status: {event_row['resolution_status']}\n"
+                f"Top question: {event_row['display_query']}\n"
                 f"Repeated: {event_row['occurrence_count']} times\n"
                 f"Suggested action: Add knowledge file {event_row['suggested_kb_filename']}"
             )
@@ -92,8 +98,15 @@ def _send_slack_alert(event_row):
         }
 
 
-def _upsert_knowledge_gap(cursor, ticket_id, category, normalized_query, confidence_score, suggested_kb_filename):
-    """Updates the existing knowledge gap table"""
+def _upsert_knowledge_gap(
+    cursor,
+    ticket_id,
+    category,
+    normalized_query,
+    confidence_score,
+    suggested_kb_filename,
+    resolution_status,
+):
     gap_alert_threshold = get_gap_alert_threshold()
     gap_group_key = build_gap_group_key(category, normalized_query)
     display_query = normalized_query.title()
@@ -140,12 +153,22 @@ def _upsert_knowledge_gap(cursor, ticket_id, category, normalized_query, confide
             ),
         )
         last_alert_count = existing["last_alert_count"] or 0
-        if occurrence_count >= gap_alert_threshold and occurrence_count > last_alert_count:
+        should_alert_for_tentative = (
+            resolution_status == "tentative"
+            and occurrence_count >= gap_alert_threshold
+            and occurrence_count > last_alert_count
+        )
+        should_alert_for_unresolved = (
+            resolution_status == "unresolved"
+            and occurrence_count > last_alert_count
+        )
+        if should_alert_for_tentative or should_alert_for_unresolved:
             alert_result = _send_slack_alert(
                 {
                     "display_query": display_query,
                     "occurrence_count": occurrence_count,
                     "suggested_kb_filename": suggested_kb_filename,
+                    "resolution_status": resolution_status,
                 }
             )
             cursor.execute(
@@ -191,12 +214,17 @@ def _upsert_knowledge_gap(cursor, ticket_id, category, normalized_query, confide
                 confidence_score,
             ),
         )
-        if 1 >= gap_alert_threshold:
+        should_alert_for_tentative = (
+            resolution_status == "tentative" and 1 >= gap_alert_threshold
+        )
+        should_alert_for_unresolved = resolution_status == "unresolved"
+        if should_alert_for_tentative or should_alert_for_unresolved:
             alert_result = _send_slack_alert(
                 {
                     "display_query": display_query,
                     "occurrence_count": 1,
                     "suggested_kb_filename": suggested_kb_filename,
+                    "resolution_status": resolution_status,
                 }
             )
             cursor.execute(
@@ -232,38 +260,42 @@ def submit_ticket(title, description, category, priority, user_id):
     conn = database.get_db_connection()
     try:
         cursor = conn.cursor()
+        insert_columns = [
+            "title",
+            "description",
+            "category",
+            "priority",
+            "user_id",
+            "ai_resolution",
+            "confidence_score",
+            "resolution_status",
+            "retrieval_score",
+            "kb_context_found",
+            "normalized_query",
+            "suggested_kb_filename",
+        ]
+        insert_values = [
+            title,
+            description,
+            category,
+            priority,
+            user_id,
+            analysis["resolution_text"],
+            analysis["confidence_score"],
+            analysis["resolution_status"],
+            analysis["retrieval_score"],
+            int(bool(analysis["kb_context_found"])),
+            normalized_query,
+            suggested_kb_filename,
+        ]
+        if _table_has_column(cursor, "tickets", "top_retrieval_score"):
+            insert_columns.append("top_retrieval_score")
+            insert_values.append(analysis.get("top_retrieval_score", analysis["retrieval_score"]))
+
+        placeholders = ", ".join("?" for _ in insert_columns)
         cursor.execute(
-            """
-            INSERT INTO tickets (
-                title,
-                description,
-                category,
-                priority,
-                user_id,
-                ai_resolution,
-                confidence_score,
-                resolution_status,
-                retrieval_score,
-                kb_context_found,
-                normalized_query,
-                suggested_kb_filename
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                title,
-                description,
-                category,
-                priority,
-                user_id,
-                analysis["resolution_text"],
-                analysis["confidence_score"],
-                analysis["resolution_status"],
-                analysis["retrieval_score"],
-                int(bool(analysis["kb_context_found"])),
-                normalized_query,
-                suggested_kb_filename,
-            ),
+            f"INSERT INTO tickets ({', '.join(insert_columns)}) VALUES ({placeholders})",
+            tuple(insert_values),
         )
         ticket_id = cursor.lastrowid
 
@@ -275,6 +307,7 @@ def submit_ticket(title, description, category, priority, user_id):
                 normalized_query=normalized_query,
                 confidence_score=analysis["confidence_score"],
                 suggested_kb_filename=suggested_kb_filename,
+                resolution_status=analysis["resolution_status"],
             )
             cursor.execute(
                 "UPDATE tickets SET gap_group_key = ? WHERE id = ?",
@@ -289,29 +322,74 @@ def submit_ticket(title, description, category, priority, user_id):
     saved_ticket["alert_status"] = alert_result["status"] if alert_result else None
     return saved_ticket
 
+def delete_ticket(ticket_id):
+    """Deletes a ticket."""
+    return database.delete_ticket(ticket_id)
+
+def update_ticket(ticket_id, title, description, category, priority):
+    """Updates an existing ticket and re-evaluates it."""
+    analysis = llm_engine.analyze_ticket(title, description, priority, category)
+    normalized_query = normalize_ticket_text(title, description)
+    suggested_kb_filename = analysis.get("suggested_kb_filename") or suggest_kb_filename(normalized_query)
+
+    conn = database.get_db_connection()
+    try:
+        cursor = conn.cursor()
+        update_columns = [
+            ("title", title),
+            ("description", description),
+            ("category", category),
+            ("priority", priority),
+            ("ai_resolution", analysis["resolution_text"]),
+            ("confidence_score", analysis["confidence_score"]),
+            ("resolution_status", analysis["resolution_status"]),
+            ("retrieval_score", analysis["retrieval_score"]),
+            ("kb_context_found", int(bool(analysis["kb_context_found"]))),
+            ("normalized_query", normalized_query),
+            ("suggested_kb_filename", suggested_kb_filename),
+        ]
+
+        if _table_has_column(cursor, "tickets", "top_retrieval_score"):
+            update_columns.append(("top_retrieval_score", analysis.get("top_retrieval_score", analysis["retrieval_score"])))
+
+        set_clause = ", ".join(f"{col} = ?" for col, _ in update_columns)
+        values = [val for _, val in update_columns]
+        values.append(ticket_id)
+
+        cursor.execute(
+            f"UPDATE tickets SET {set_clause} WHERE id = ?",
+            tuple(values)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return get_ticket_by_id(ticket_id)
+
 def submit_feedback(ticket_id, feedback_value, user_id):
-    """ Stores one helpful/not_helpful response for a user's ticket."""
+    """Stores one helpful/not_helpful response for a user's ticket."""
     if feedback_value not in {"helpful", "not_helpful"}:
-        raise ValueError("Invalid feedback value. Must be 'helpful' or 'not_helpful'.")
-    
+        raise ValueError("feedback_value must be 'helpful' or 'not_helpful'")
+
     conn = database.get_db_connection()
     try:
         cursor = conn.cursor()
         cursor.execute(
             """
-            UPDATE tickets 
-            SET feedback_value = ?,feedback_at = CURRENT_TIMESTAMP
+            UPDATE tickets
+            SET feedback_value = ?, feedback_at = CURRENT_TIMESTAMP
             WHERE id = ? AND user_id = ? AND feedback_value IS NULL
             """,
-            (feedback_value,ticket_id,user_id)
+            (feedback_value, ticket_id, user_id),
         )
         conn.commit()
         return cursor.rowcount > 0
     finally:
         conn.close()
 
+
 def get_all_tickets():
-    """Returns all tickets from the database."""
+    """Retrieves all tickets (Admin view)."""
     conn = database.get_db_connection()
     try:
         return pd.read_sql_query("SELECT * FROM tickets ORDER BY created_at DESC", conn)
@@ -319,11 +397,11 @@ def get_all_tickets():
         conn.close()
 
 def get_user_tickets(user_id):
-    """Retrieves tickets for a specifie user."""
+    """Retrieves tickets for a specific user."""
     conn = database.get_db_connection()
     try:
         query = "SELECT * FROM tickets WHERE user_id = ? ORDER BY created_at DESC"
-        return pd.read_sql_query(query,conn,params=(user_id,))
+        return pd.read_sql_query(query, conn, params=(user_id,))
     finally:
         conn.close()
 
@@ -332,7 +410,7 @@ def get_ticket_by_id(ticket_id):
     conn = database.get_db_connection()
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM tickets WHERE id = ?",(ticket_id,))
+        cursor.execute("SELECT * FROM tickets WHERE id = ?", (ticket_id,))
         row = cursor.fetchone()
         return dict(row) if row else None
     finally:
@@ -347,17 +425,17 @@ def get_admin_kpis():
         SELECT
             COUNT(*) AS total_tickets,
             SUM(CASE WHEN resolution_status = 'resolved' THEN 1 ELSE 0 END) AS resolved_tickets,
-            SUM(CASE WHEN resolution_status = 'unresolved' THEN 1 ELSE 0 END) AS unresolved_tickets,
             SUM(CASE WHEN resolution_status = 'tentative' THEN 1 ELSE 0 END) AS tentative_tickets,
+            SUM(CASE WHEN resolution_status = 'unresolved' THEN 1 ELSE 0 END) AS unresolved_tickets,
             ROUND(AVG(confidence_score), 3) AS avg_confidence,
             SUM(CASE WHEN feedback_value = 'helpful' THEN 1 ELSE 0 END) AS helpful_count,
             SUM(CASE WHEN feedback_value = 'not_helpful' THEN 1 ELSE 0 END) AS not_helpful_count
         FROM tickets
         """
         )
-        row =dict(cursor.fetchone())
-        feedback_total  = (row["helpful_count"] or 0) +(row["not_helpful_count"] or 0)
-        row["helpful_rate"] = round((row["helpful_count"] or 0)/ feedback_total,3) if feedback_total else 0.0
+        row = dict(cursor.fetchone())
+        feedback_total = (row["helpful_count"] or 0) + (row["not_helpful_count"] or 0)
+        row["helpful_rate"] = round((row["helpful_count"] or 0) / feedback_total, 3) if feedback_total else 0.0
         return row
     finally:
         conn.close()
@@ -367,14 +445,121 @@ def get_top_questions(limit=10):
     try:
         return pd.read_sql_query(
             """
-            SELECT normalized_query, category, COUNT(*) AS ticket_count, MAX(created_at)
+            SELECT normalized_query, category, COUNT(*) AS ticket_count, MAX(created_at) AS latest_seen_at
             FROM tickets
             GROUP BY normalized_query, category
-            ORDER BY ticket_count DESC, lastest_seen DESC
+            ORDER BY ticket_count DESC, latest_seen_at DESC
             LIMIT ?
             """,
             conn,
-            params=(limit,)
+            params=(limit,),
+        )
+    finally:
+        conn.close()
+
+def get_confidence_by_category():
+    conn = database.get_db_connection()
+    try:
+        return pd.read_sql_query(
+            """
+            SELECT
+                category,
+                ROUND(AVG(confidence_score), 3) AS avg_confidence_score,
+                COUNT(*) AS ticket_count
+            FROM tickets
+            GROUP BY category
+            ORDER BY avg_confidence_score ASC, ticket_count DESC
+            """,
+            conn,
+        )
+    finally:
+        conn.close()
+
+
+def get_feedback_rollup():
+    conn = database.get_db_connection()
+    try:
+        return pd.read_sql_query(
+            """
+            SELECT
+                COALESCE(feedback_value, 'unrated') AS feedback_value,
+                COUNT(*) AS ticket_count
+            FROM tickets
+            GROUP BY COALESCE(feedback_value, 'unrated')
+            ORDER BY ticket_count DESC
+            """,
+            conn,
+        )
+    finally:
+        conn.close()
+
+
+def get_knowledge_gap_groups(limit=10):
+    conn = database.get_db_connection()
+    try:
+        return pd.read_sql_query(
+            """
+            SELECT
+                display_query,
+                category,
+                occurrence_count,
+                avg_confidence_score,
+                latest_confidence_score,
+                suggested_kb_filename,
+                last_alert_status,
+                last_alert_message,
+                last_seen_at
+            FROM knowledge_gap_events
+            ORDER BY occurrence_count DESC, last_seen_at DESC
+            LIMIT ?
+            """,
+            conn,
+            params=(limit,),
+        )
+    finally:
+        conn.close()
+
+
+def get_knowledge_gap_heatmap():
+    conn = database.get_db_connection()
+    try:
+        return pd.read_sql_query(
+            """
+            SELECT
+                category,
+                COALESCE(gap_group_key, 'no_gap') AS topic_key,
+                ROUND(AVG(confidence_score), 3) AS avg_confidence_score,
+                COUNT(*) AS ticket_count
+            FROM tickets
+            WHERE resolution_status IN ('tentative', 'unresolved')
+            GROUP BY category, COALESCE(gap_group_key, 'no_gap')
+            ORDER BY avg_confidence_score ASC, ticket_count DESC
+            """,
+            conn,
+        )
+    finally:
+        conn.close()
+
+
+def get_recentalerts(limit=10):
+    conn = database.get_db_connection()
+    try:
+        return pd.read_sql_query(
+            """
+            SELECT
+                display_query,
+                occurrence_count,
+                suggested_kb_filename,
+                last_alert_status,
+                last_alert_message,
+                last_alert_at
+            FROM knowledge_gap_events
+            WHERE last_alert_at IS NOT NULL OR last_alert_status IS NOT NULL
+            ORDER BY COALESCE(last_alert_at, last_seen_at) DESC
+            LIMIT ?
+            """,
+            conn,
+            params=(limit,),
         )
     finally:
         conn.close()

@@ -10,3 +10,4 @@ pypdf
 numpy
 streamlit
 pandas
+plotly

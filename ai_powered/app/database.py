@@ -11,6 +11,7 @@ TICKET_COLUMNS = {
     "confidence_score": "REAL DEFAULT 0.0",
     "resolution_status": "TEXT DEFAULT 'unresolved'",
     "retrieval_score": "REAL DEFAULT 0.0",
+    "top_retrieval_score": "REAL DEFAULT 0.0",
     "kb_context_found": "INTEGER DEFAULT 0",
     "gap_group_key": "TEXT",
     "normalized_query": "TEXT",
@@ -122,6 +123,73 @@ def get_user(username):
         cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
         row = cursor.fetchone()
         return dict(row) if row else None
+    finally:
+        conn.close()
+
+def update_user_password(username, new_password_hash):
+    """Updates a user's password."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET password_hash = ? WHERE username = ?", (new_password_hash, username))
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+def update_username(old_username, new_username):
+    """Updates a user's username across all referenced tables."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT username FROM users WHERE username = ?", (new_username,))
+        if cursor.fetchone():
+            return False
+            
+        cursor.execute("UPDATE users SET username = ? WHERE username = ?", (new_username, old_username))
+        cursor.execute("UPDATE tickets SET user_id = ? WHERE user_id = ?", (new_username, old_username))
+        conn.commit()
+        return True
+    except sqlite3.Error:
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+def delete_user(username):
+    """Deletes a user and their tickets from the database."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        # Delete user's tickets first
+        cursor.execute("DELETE FROM tickets WHERE user_id = ?", (username,))
+        # Delete user
+        cursor.execute("DELETE FROM users WHERE username = ?", (username,))
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+def delete_ticket(ticket_id):
+    """Deletes a ticket by ID."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM tickets WHERE id = ?", (ticket_id,))
+        # Also clean up related knowledge gap events if needed, but not strictly necessary
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+def get_all_users():
+    """Retrieves all users."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT username, role FROM users")
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
     finally:
         conn.close()
 
